@@ -1,8 +1,11 @@
 __pycache__/
 .env
 .venv
+.ipynb_checkpoints/
 data/raw/*
 data/processed/*
 *.pt
 *.pth
-.ipynb_checkpoints/
+*.h5
+*.csv
+*.jpg
