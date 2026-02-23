@@ -3,8 +3,14 @@ torchvision
 numpy
 pandas
 scikit-learn
+xgboost
 matplotlib
 seaborn
-opencv-python
+opencv-python-headless
 streamlit
 tqdm
+Pillow
+joblib
+python-dotenv
+scipy
+wandb
