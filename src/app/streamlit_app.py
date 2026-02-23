@@ -1,19 +1,59 @@
 """
-Multimodal ASD Diagnosis System — Streamlit Skeleton
+Multimodal ASD Diagnosis System — Streamlit App
 Author: Bonnie
-Status: Skeleton (proof of progress) — no model connected yet
+Version: v1.0 — Fusion model connected
 
-When wiring the real model (notebook 04), replace only these three lines:
-    asd_risk       = "HIGH"   →  "HIGH" if face_prob >= 0.5 else "LOW"
-    confidence_pct = 78       →  int(face_prob * 100)
-    face_prob      = 0.78     →  float from EfficientNet softmax output
-Nothing else in this file needs to change.
+Architecture:
+    EfficientNet-B0 trained with class-conditional knowledge distillation
+    from eye-tracking SVM teacher. At inference: facial image only.
+    Model: best_fusion_model.pth  (EfficientNet-B0, 4M params,
+           Dropout(0.3) → Linear(1280→2), torchvision 0.25.0+cu128)
+
+Preprocessing:
+    Resize → 224×224, ImageNet normalisation
+    mean=[0.485, 0.456, 0.406]  std=[0.229, 0.224, 0.225]
+
+Model path (relative to project root):
+    autism-multimodal-fusion/
+    └── models/
+        └── best_fusion_model.pth   ← place file here
+
+To download from Google Drive (run once in Colab, then copy to local):
+    from google.colab import drive
+    drive.mount('/content/drive')
+    import shutil, os
+    os.makedirs('models', exist_ok=True)
+    shutil.copy(
+        '/content/drive/MyDrive/best_fusion_model.pth',
+        'models/best_fusion_model.pth'
+    )
 """
+
+import os
+import io
+import time
+from pathlib import Path
 
 import streamlit as st
 from PIL import Image
-import io
-import time
+
+# Torch imports — guarded so the app shows a clear error if PyTorch is missing
+# rather than a cryptic import stack trace
+try:
+    import torch
+    import torch.nn as nn
+    from torchvision import models, transforms
+    TORCH_AVAILABLE = True
+except ImportError:
+    TORCH_AVAILABLE = False
+
+# ── PATHS ─────────────────────────────────────────────────────────────────────
+# All paths relative to this file — works from any machine after cloning repo.
+# app/streamlit_app.py → parent = app/ → parent = project root
+APP_DIR    = Path(__file__).parent
+# ROOT_DIR   = APP_DIR.parent
+# MODEL_PATH = ROOT_DIR / "models" / "best_fusion_model.pth"
+MODEL_PATH = APP_DIR.parent / "models" / "best_fusion_model.pth"
 
 # ── PAGE CONFIG ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -98,7 +138,7 @@ html, body, [class*="css"] {
 }
 .hbadge-teal  { background: rgba(0,201,177,0.10);  color: #00c9b1; border: 1px solid rgba(0,201,177,0.30); }
 .hbadge-blue  { background: rgba(79,142,247,0.10); color: #6da0f8; border: 1px solid rgba(79,142,247,0.30); }
-.hbadge-amber { background: rgba(251,188,5,0.10);  color: #fbc005; border: 1px solid rgba(251,188,5,0.30); }
+.hbadge-green { background: rgba(0,210,100,0.10);  color: #00d264; border: 1px solid rgba(0,210,100,0.30); }
 
 /* ── Section divider ─────────────────────────────────────────────────────── */
 .section-divider {
@@ -170,26 +210,26 @@ section[data-testid="stFileUploader"]:hover {
     height: 8px !important;
 }
 
-/* ── Warning / info boxes ────────────────────────────────────────────────── */
-[data-testid="stWarning"] {
-    background: rgba(255,107,107,0.06) !important;
-    border: 1px solid rgba(255,107,107,0.22) !important;
-    border-left: 3px solid #ff7070 !important;
-    border-radius: 0 8px 8px 0 !important;
-}
-[data-testid="stInfo"] {
-    background: rgba(79,142,247,0.06) !important;
-    border: 1px solid rgba(79,142,247,0.22) !important;
-    border-left: 3px solid #4f8ef7 !important;
-    border-radius: 0 8px 8px 0 !important;
-}
-
 /* ── Caption ─────────────────────────────────────────────────────────────── */
 [data-testid="stCaptionContainer"] p {
     font-family: 'JetBrains Mono', monospace !important;
     font-size: 0.67rem !important;
     color: #2a4060 !important;
     line-height: 1.7 !important;
+}
+
+/* ── Model error / warning box ───────────────────────────────────────────── */
+.model-error {
+    background: rgba(251,188,5,0.05);
+    border: 1px solid rgba(251,188,5,0.2);
+    border-left: 3px solid #fbc005;
+    border-radius: 0 8px 8px 0;
+    padding: 1rem 1.2rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.75rem;
+    color: #c8a030;
+    line-height: 1.8;
+    margin: 1rem 0;
 }
 
 /* ── Empty state ─────────────────────────────────────────────────────────── */
@@ -207,11 +247,7 @@ section[data-testid="stFileUploader"]:hover {
     text-transform: uppercase;
     color: #2a4060;
 }
-.empty-icon {
-    font-size: 2.4rem;
-    opacity: 0.15;
-    margin: 1rem 0;
-}
+.empty-icon { font-size: 2.4rem; opacity: 0.15; margin: 1rem 0; }
 .empty-text {
     font-family: 'JetBrains Mono', monospace;
     font-size: 0.85rem;
@@ -226,21 +262,123 @@ header    { visibility: hidden; }
 """, unsafe_allow_html=True)
 
 
+# ── MODEL LOADER ──────────────────────────────────────────────────────────────
+# @st.cache_resource: loads once per session, survives reruns.
+# Without this the model reloads on every file upload or page interaction.
+
+@st.cache_resource(show_spinner=False)
+def load_model(model_path: Path):
+    """
+    Load best_fusion_model.pth.
+    Returns (model, device) on success, (None, error_str) on failure.
+
+    Architecture must match Notebook 04 exactly:
+        efficientnet_b0 with classifier replaced by
+        Sequential(Dropout(0.3), Linear(1280, 2))
+    """
+    if not TORCH_AVAILABLE:
+        return None, "PyTorch not installed. Run: pip install torch torchvision"
+
+    if not model_path.exists():
+        msg = (
+            "Model weights not found.<br>"
+            "Expected: <code>" + str(model_path) + "</code><br><br>"
+            "Download <code>best_fusion_model.pth</code> from Google Drive "
+            "and place it in <code>models/</code> at the project root:<br>"
+            "<code>autism-multimodal-fusion/models/best_fusion_model.pth</code><br><br>"
+            "From Colab:<br>"
+            "<code>shutil.copy('/content/drive/MyDrive/best_fusion_model.pth', "
+            "'models/best_fusion_model.pth')</code>"
+        )
+        return None, msg
+
+    try:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        # Rebuild architecture — must match training in Notebook 04
+        model = models.efficientnet_b0(weights=None)
+        model.classifier = nn.Sequential(
+            nn.Dropout(p=0.3, inplace=True),
+            nn.Linear(1280, 2),
+        )
+
+        # weights_only=True: safe loading, avoids arbitrary code execution
+        state_dict = torch.load(model_path, map_location=device, weights_only=True)
+        model.load_state_dict(state_dict)
+        model.to(device)
+        model.eval()   # disables dropout + batchnorm training behaviour
+
+        return model, device
+
+    except Exception as exc:
+        return None, "Failed to load model: " + str(exc)
+
+
+# ── INFERENCE TRANSFORM ───────────────────────────────────────────────────────
+# Identical to val/test transform in Notebooks 02 and 04.
+# No augmentation — inference must be deterministic.
+
+def get_transform():
+    if not TORCH_AVAILABLE:
+        return None
+    return transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        transforms.Normalize(
+            mean=[0.485, 0.456, 0.406],
+            std=[0.229, 0.224, 0.225],
+        ),
+    ])
+
+
+def predict(model, device, pil_image: Image.Image) -> float:
+    """
+    Run inference on a PIL image. Returns face_prob: float in [0, 1].
+    face_prob = P(ASD) from softmax output, class index 1.
+    Decision threshold: >= 0.5 → HIGH risk.
+    """
+    transform = get_transform()
+    tensor = transform(pil_image)        # [3, 224, 224]
+    tensor = tensor.unsqueeze(0)         # [1, 3, 224, 224]
+    tensor = tensor.to(device)
+
+    with torch.no_grad():
+        logits = model(tensor)           # [1, 2]  raw scores
+        probs  = torch.softmax(logits, dim=1)  # [1, 2]  probabilities
+        face_prob = probs[0, 1].item()   # P(ASD)
+
+    return face_prob
+
+
 # ── HEADER ────────────────────────────────────────────────────────────────────
 st.markdown("""
 <div class="app-header">
     <div class="header-glow"></div>
-    <div class="header-eyebrow">Research Prototype &middot; v0.1</div>
+    <div class="header-eyebrow">Research Prototype &middot; v1.0</div>
     <div class="header-title">&#129504; ASD Screening System</div>
     <div class="header-sub">Multimodal AI Diagnostic Tool &mdash; Facial Analysis</div>
     <div class="header-badges">
         <span class="hbadge hbadge-teal">EfficientNet-B0</span>
-        <span class="hbadge hbadge-blue">86% Test Accuracy</span>
+        <span class="hbadge hbadge-blue">86.26% Fusion Accuracy</span>
         <span class="hbadge hbadge-teal">0.83 ASD Recall</span>
-        <span class="hbadge hbadge-amber">Skeleton &middot; No Model</span>
+        <span class="hbadge hbadge-green">Fusion Model &middot; v1.0</span>
     </div>
 </div>
 """, unsafe_allow_html=True)
+
+
+# ── LOAD MODEL (once, cached) ─────────────────────────────────────────────────
+model_result, device_or_err = load_model(MODEL_PATH)
+model_ready = model_result is not None
+
+if not model_ready:
+    st.markdown(
+        '<div class="model-error">'
+        '<strong>Model weights not loaded</strong><br><br>'
+        + device_or_err +
+        '</div>',
+        unsafe_allow_html=True,
+    )
 
 
 # ── IMAGE INPUT ───────────────────────────────────────────────────────────────
@@ -259,26 +397,40 @@ uploaded_file = st.file_uploader(
 )
 
 
-# ── MAIN: post-upload layout ──────────────────────────────────────────────────
+# ── MAIN: post-upload ─────────────────────────────────────────────────────────
 if uploaded_file:
 
-    # Show spinner only on first upload of each file, not on every Streamlit rerun.
-    # st.session_state persists across reruns within the same browser session.
-    if ("last_filename" not in st.session_state
-            or st.session_state.last_filename != uploaded_file.name):
-        with st.spinner("Running preprocessing pipeline…"):
-            time.sleep(0.8)
-        st.session_state.last_filename = uploaded_file.name
+    # Detect whether this is a new file or a rerun of the same session
+    is_new_file = (
+        "last_filename" not in st.session_state
+        or st.session_state.last_filename != uploaded_file.name
+    )
 
     image = Image.open(io.BytesIO(uploaded_file.read())).convert("RGB")
 
+    if is_new_file:
+        if model_ready:
+            with st.spinner("Running inference…"):
+                result_prob = predict(model_result, device_or_err, image)
+        else:
+            # Model not loaded — show UI with placeholder so layout is visible
+            with st.spinner("Preprocessing image…"):
+                time.sleep(0.6)
+            result_prob = None
+
+        st.session_state.last_filename = uploaded_file.name
+        st.session_state.last_prob     = result_prob
+
+    # Always read from session_state for rendering — handles both new and rerun
+    face_prob = st.session_state.get("last_prob", None)
+
     col_l, col_r = st.columns([5, 4], gap="large")
 
-    # ── LEFT COLUMN: image ────────────────────────────────────────────────────
+    # ── LEFT: image ───────────────────────────────────────────────────────────
     with col_l:
         st.image(image, use_container_width=True)
 
-    # ── RIGHT COLUMN: results ─────────────────────────────────────────────────
+    # ── RIGHT: results ────────────────────────────────────────────────────────
     with col_r:
 
         st.markdown("""
@@ -289,27 +441,41 @@ if uploaded_file:
         </div>
         """, unsafe_allow_html=True)
 
-        # ── Placeholder values ─────────────────────────────────────────────────
-        # When wiring the real model, replace ONLY these three lines.
-        # Everything below this block stays exactly as-is.
-        asd_risk       = "HIGH"   # → "HIGH" if face_prob >= 0.5 else "LOW"
-        confidence_pct = 78       # → int(face_prob * 100)
-        face_prob      = 0.78     # → float from EfficientNet softmax output
+        if face_prob is not None:
+            # ── Real model output ──────────────────────────────────────────
+            asd_risk = "HIGH" if face_prob >= 0.5 else "LOW"
+
+            # confidence_pct = confidence in the predicted class:
+            #   HIGH → P(ASD) as %
+            #   LOW  → P(TD) = 1 - P(ASD) as %
+            confidence_pct = (
+                int(face_prob * 100)
+                if face_prob >= 0.5
+                else int((1 - face_prob) * 100)
+            )
+        else:
+            # Model unavailable — neutral placeholder, UI still renders
+            asd_risk       = "—"
+            confidence_pct = 0
+            face_prob      = 0.0
 
         is_high   = asd_risk == "HIGH"
         block_cls = "result-block-high" if is_high else "result-block-low"
         risk_cls  = "result-risk-high"  if is_high else "result-risk-low"
         pct_cls   = "result-pct-high"   if is_high else "result-pct-low"
         alert_cls = "clinical-alert-high" if is_high else "clinical-alert-low"
-        sub_text  = ("Elevated ASD indicators detected"
-                     if is_high else "Within typical developmental range")
-        alert_msg = ("Clinical review and standardised assessment required."
-                     if is_high else
-                     "No strong ASD indicators detected. A LOW result does not "
-                     "exclude ASD — clinical judgement remains essential.")
+        sub_text  = (
+            "Elevated ASD indicators detected"
+            if is_high else "Within typical developmental range"
+        )
+        alert_msg = (
+            "Clinical review and standardised assessment required."
+            if is_high else
+            "No strong ASD indicators detected. A LOW result does not "
+            "exclude ASD — clinical judgement remains essential."
+        )
 
-        # ── Primary result block: HIGH/LOW large, confidence % to its right ──
-        # Pure string concatenation — no HTML entities, no f-string escaping risk
+        # Primary result block — HIGH/LOW large, confidence % to its right
         st.markdown(
             '<div class="result-block ' + block_cls + '">'
             '<div class="result-outcome-label">ASD Risk Level</div>'
@@ -319,35 +485,40 @@ if uploaded_file:
             '</div>'
             '<div class="result-sub">' + sub_text + '</div>'
             '</div>',
-            unsafe_allow_html=True
+            unsafe_allow_html=True,
         )
 
-        # ── Confidence bar with label ─────────────────────────────────────────
+        # Confidence bar
         st.progress(confidence_pct / 100)
         st.markdown(
-            '<p style="font-family:\'JetBrains Mono\',monospace; font-size:0.68rem; '
-            'color:#3d5a78; margin-top:-0.3rem; margin-bottom:0.8rem; letter-spacing:0.06em;">'
+            '<p style="font-family:\'JetBrains Mono\',monospace;font-size:0.68rem;'
+            'color:#3d5a78;margin-top:-0.3rem;margin-bottom:0.8rem;letter-spacing:0.06em;">'
             'Model confidence: ' + str(confidence_pct) + '%'
             '</p>',
-            unsafe_allow_html=True
+            unsafe_allow_html=True,
         )
 
-        # ── Clinical alert — custom styled, no st.warning() yellow clash ─────
+        # Clinical alert
         st.markdown(
             '<div class="' + alert_cls + '">' + alert_msg + '</div>',
-            unsafe_allow_html=True
+            unsafe_allow_html=True,
         )
 
-        # ── Disclaimer ────────────────────────────────────────────────────────
+        # Disclaimer
         st.caption(
             "Research prototype — not a diagnostic instrument. "
             "Confidence reflects the model's probability estimate for ASD-associated "
-            "facial patterns. All outputs require clinical validation."
+            "facial patterns. All outputs require clinical validation before any "
+            "clinical action is taken."
         )
 
 
 # ── EMPTY STATE ───────────────────────────────────────────────────────────────
 else:
+    # Clear session cache when file is removed so next upload reruns inference
+    st.session_state.pop("last_filename", None)
+    st.session_state.pop("last_prob", None)
+
     st.markdown("""
     <div class="section-divider">
         <div class="section-divider-line"></div>
