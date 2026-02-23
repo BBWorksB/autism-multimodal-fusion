@@ -1,6 +1,5 @@
 """
 Multimodal ASD Diagnosis System — Streamlit App
-Author: Bonnie
 Version: v1.0 — Fusion model connected
 
 Architecture:
@@ -15,17 +14,18 @@ Preprocessing:
 
 Model path (relative to project root):
     autism-multimodal-fusion/
-    └── models/
-        └── best_fusion_model.pth   ← place file here
+    └── src/
+        └── models/
+            └── best_fusion_model.pth
 
 To download from Google Drive (run once in Colab, then copy to local):
     from google.colab import drive
     drive.mount('/content/drive')
     import shutil, os
-    os.makedirs('models', exist_ok=True)
+    os.makedirs('src/models', exist_ok=True)
     shutil.copy(
         '/content/drive/MyDrive/best_fusion_model.pth',
-        'models/best_fusion_model.pth'
+        'src/models/best_fusion_model.pth'
     )
 """
 
@@ -47,15 +47,13 @@ try:
 except ImportError:
     TORCH_AVAILABLE = False
 
-# ── PATHS ─────────────────────────────────────────────────────────────────────
+# ── PATHS ───────────────────────────
 # All paths relative to this file — works from any machine after cloning repo.
 # app/streamlit_app.py → parent = app/ → parent = project root
 APP_DIR    = Path(__file__).parent
-# ROOT_DIR   = APP_DIR.parent
-# MODEL_PATH = ROOT_DIR / "models" / "best_fusion_model.pth"
 MODEL_PATH = APP_DIR.parent / "models" / "best_fusion_model.pth"
 
-# ── PAGE CONFIG ───────────────────────────────────────────────────────────────
+# ── PAGE CONFIG ─────────────────────
 st.set_page_config(
     page_title="ASD Screening Tool",
     page_icon="🧠",
@@ -63,12 +61,12 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# ── CSS ───────────────────────────────────────────────────────────────────────
+# ── CSS ─────────────────────────────
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500&display=swap');
 
-/* ── Global ──────────────────────────────────────────────────────────────── */
+/* ── Global ────────────────────── */
 html, body, [class*="css"] {
     font-family: 'Space Grotesk', sans-serif !important;
     background-color: #07111f;
@@ -82,13 +80,13 @@ html, body, [class*="css"] {
     min-height: 100vh;
 }
 
-/* ── Container ───────────────────────────────────────────────────────────── */
+/* ── Container ─────────────────── */
 .main .block-container {
     max-width: 860px !important;
     padding: 0 1.5rem 4rem 1.5rem !important;
 }
 
-/* ── Header ──────────────────────────────────────────────────────────────── */
+/* ── Header ────────────────────── */
 .app-header {
     text-align: center;
     padding: 3.5rem 2rem 2.5rem 2rem;
@@ -140,7 +138,7 @@ html, body, [class*="css"] {
 .hbadge-blue  { background: rgba(79,142,247,0.10); color: #6da0f8; border: 1px solid rgba(79,142,247,0.30); }
 .hbadge-green { background: rgba(0,210,100,0.10);  color: #00d264; border: 1px solid rgba(0,210,100,0.30); }
 
-/* ── Section divider ─────────────────────────────────────────────────────── */
+/* ── Section divider ───────────── */
 .section-divider {
     display: flex;
     align-items: center;
@@ -161,7 +159,7 @@ html, body, [class*="css"] {
     font-weight: 500;
 }
 
-/* ── File uploader ───────────────────────────────────────────────────────── */
+/* ── File uploader ─────────────── */
 section[data-testid="stFileUploader"] {
     background: rgba(10,16,32,0.85) !important;
     border: 1.5px dashed #1d3050 !important;
@@ -172,14 +170,14 @@ section[data-testid="stFileUploader"]:hover {
     border-color: rgba(0,201,177,0.45) !important;
 }
 
-/* ── Uploaded image ──────────────────────────────────────────────────────── */
+/* ── Uploaded image ────────────── */
 [data-testid="stImage"] img {
     border-radius: 10px;
     border: 1px solid #1a2d45;
     box-shadow: 0 8px 40px rgba(0,0,0,0.55);
 }
 
-/* ── Primary result block ────────────────────────────────────────────────── */
+/* ── Primary result block ──────── */
 .result-block { border-radius: 12px; padding: 1.4rem 1.6rem 1.2rem 1.6rem; margin-bottom: 1rem; position: relative; overflow: hidden; }
 .result-block::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 1px; }
 .result-block-high { background: linear-gradient(135deg, rgba(28,10,10,0.95), rgba(18,8,8,0.95)); border: 1px solid rgba(255,112,112,0.25); }
@@ -194,11 +192,11 @@ section[data-testid="stFileUploader"]:hover {
 .result-pct-low   { font-family: 'JetBrains Mono', monospace; font-size: 1.3rem; font-weight: 500; color: rgba(0,201,177,0.55); line-height: 1; }
 .result-sub { font-family: 'JetBrains Mono', monospace; font-size: 0.7rem; color: #3d5a78; margin-top: 0.2rem; }
 
-/* ── Clinical alert ──────────────────────────────────────────────────────── */
+/* ── Clinical alert ────────────── */
 .clinical-alert-high { background: rgba(255,112,112,0.05); border: 1px solid rgba(255,112,112,0.2); border-left: 3px solid #ff7070; border-radius: 0 8px 8px 0; padding: 0.85rem 1rem; font-family: 'JetBrains Mono', monospace; font-size: 0.75rem; color: #c07070; line-height: 1.6; margin-bottom: 0.8rem; }
 .clinical-alert-low  { background: rgba(79,142,247,0.05);  border: 1px solid rgba(79,142,247,0.2);  border-left: 3px solid #4f8ef7; border-radius: 0 8px 8px 0; padding: 0.85rem 1rem; font-family: 'JetBrains Mono', monospace; font-size: 0.75rem; color: #6090c0; line-height: 1.6; margin-bottom: 0.8rem; }
 
-/* ── Progress bar ────────────────────────────────────────────────────────── */
+/* ── Progress bar ──────────────── */
 [data-testid="stProgress"] > div > div {
     background: linear-gradient(90deg, #006b60, #00c9b1) !important;
     border-radius: 99px !important;
@@ -210,7 +208,7 @@ section[data-testid="stFileUploader"]:hover {
     height: 8px !important;
 }
 
-/* ── Caption ─────────────────────────────────────────────────────────────── */
+/* ── Caption ───────────────────── */
 [data-testid="stCaptionContainer"] p {
     font-family: 'JetBrains Mono', monospace !important;
     font-size: 0.67rem !important;
@@ -218,7 +216,7 @@ section[data-testid="stFileUploader"]:hover {
     line-height: 1.7 !important;
 }
 
-/* ── Model error / warning box ───────────────────────────────────────────── */
+/* ── Model error / warning box ─── */
 .model-error {
     background: rgba(251,188,5,0.05);
     border: 1px solid rgba(251,188,5,0.2);
@@ -232,7 +230,7 @@ section[data-testid="stFileUploader"]:hover {
     margin: 1rem 0;
 }
 
-/* ── Empty state ─────────────────────────────────────────────────────────── */
+/* ── Empty state ───────────────── */
 .empty-state {
     background: linear-gradient(135deg, rgba(14,26,46,0.6), rgba(10,18,32,0.6));
     border: 1px dashed #1a2d45;
@@ -254,7 +252,7 @@ section[data-testid="stFileUploader"]:hover {
     color: #3b5672;
 }
 
-/* ── Cleanup ─────────────────────────────────────────────────────────────── */
+/* ── Cleanup ───────────────────── */
 #MainMenu { visibility: hidden; }
 footer    { visibility: hidden; }
 header    { visibility: hidden; }
@@ -262,7 +260,7 @@ header    { visibility: hidden; }
 """, unsafe_allow_html=True)
 
 
-# ── MODEL LOADER ──────────────────────────────────────────────────────────────
+# ── MODEL LOADER ────────────────────
 # @st.cache_resource: loads once per session, survives reruns.
 # Without this the model reloads on every file upload or page interaction.
 
@@ -283,12 +281,7 @@ def load_model(model_path: Path):
         msg = (
             "Model weights not found.<br>"
             "Expected: <code>" + str(model_path) + "</code><br><br>"
-            "Download <code>best_fusion_model.pth</code> from Google Drive "
-            "and place it in <code>models/</code> at the project root:<br>"
-            "<code>autism-multimodal-fusion/models/best_fusion_model.pth</code><br><br>"
-            "From Colab:<br>"
-            "<code>shutil.copy('/content/drive/MyDrive/best_fusion_model.pth', "
-            "'models/best_fusion_model.pth')</code>"
+            "Ensure <code>best_fusion_model.pth</code> is present at the path above."
         )
         return None, msg
 
@@ -314,7 +307,7 @@ def load_model(model_path: Path):
         return None, "Failed to load model: " + str(exc)
 
 
-# ── INFERENCE TRANSFORM ───────────────────────────────────────────────────────
+# ── INFERENCE TRANSFORM ─────────────
 # Identical to val/test transform in Notebooks 02 and 04.
 # No augmentation — inference must be deterministic.
 
@@ -350,7 +343,7 @@ def predict(model, device, pil_image: Image.Image) -> float:
     return face_prob
 
 
-# ── HEADER ────────────────────────────────────────────────────────────────────
+# ── HEADER ──────────────────────────
 st.markdown("""
 <div class="app-header">
     <div class="header-glow"></div>
@@ -367,7 +360,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-# ── LOAD MODEL (once, cached) ─────────────────────────────────────────────────
+# ── LOAD MODEL (once, cached) ───────
 model_result, device_or_err = load_model(MODEL_PATH)
 model_ready = model_result is not None
 
@@ -381,7 +374,7 @@ if not model_ready:
     )
 
 
-# ── IMAGE INPUT ───────────────────────────────────────────────────────────────
+# ── IMAGE INPUT ─────────────────────
 st.markdown("""
 <div class="section-divider">
     <div class="section-divider-line"></div>
@@ -397,7 +390,7 @@ uploaded_file = st.file_uploader(
 )
 
 
-# ── MAIN: post-upload ─────────────────────────────────────────────────────────
+# ── MAIN: post-upload ───────────────
 if uploaded_file:
 
     # Detect whether this is a new file or a rerun of the same session
@@ -426,11 +419,11 @@ if uploaded_file:
 
     col_l, col_r = st.columns([5, 4], gap="large")
 
-    # ── LEFT: image ───────────────────────────────────────────────────────────
+    # ── LEFT: image ─────────────────
     with col_l:
         st.image(image, use_container_width=True)
 
-    # ── RIGHT: results ────────────────────────────────────────────────────────
+    # ── RIGHT: results ──────────────
     with col_r:
 
         st.markdown("""
@@ -442,7 +435,7 @@ if uploaded_file:
         """, unsafe_allow_html=True)
 
         if face_prob is not None:
-            # ── Real model output ──────────────────────────────────────────
+            # ── Real model output 
             asd_risk = "HIGH" if face_prob >= 0.5 else "LOW"
 
             # confidence_pct = confidence in the predicted class:
@@ -513,7 +506,7 @@ if uploaded_file:
         )
 
 
-# ── EMPTY STATE ───────────────────────────────────────────────────────────────
+# ── EMPTY STATE ─────────────────────
 else:
     # Clear session cache when file is removed so next upload reruns inference
     st.session_state.pop("last_filename", None)
