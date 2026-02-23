@@ -85,10 +85,7 @@ autism-multimodal-fusion/
 │   │   └── streamlit_app.py       # Streamlit inference app
 │   ├── models/
 │   │   └── best_fusion_model.pth  # Trained fusion model weights
-│   ├── configs/
-│   │   └── config.yaml
 │   └── data/
-│       └── preprocessing.py
 ├── docs/
 │   ├── model_card.md              # Model facts, limitations, intended use
 │   └── methodology.md             # Full technical methodology
