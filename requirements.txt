@@ -7,7 +7,7 @@ xgboost
 matplotlib
 seaborn
 opencv-python-headless
-streamlit
+streamlit==1.41.1
 tqdm
 Pillow
 joblib
