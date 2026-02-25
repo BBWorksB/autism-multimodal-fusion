@@ -37,6 +37,15 @@ try:
 except ImportError:
     TORCH_AVAILABLE = False
 
+
+# ── PAGE CONFIG ─────────────────────
+st.set_page_config(
+    page_title="ASD Screening Tool",
+    page_icon="🧠",
+    layout="centered",
+    initial_sidebar_state="collapsed",
+)
+
 # ── PATHS ─────────────────────────────────────────────────────────────────────
 # Model is downloaded from Hugging Face on first run and cached locally.
 APP_DIR    = Path(__file__).parent
@@ -50,14 +59,6 @@ if not MODEL_PATH.exists():
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
     with st.spinner("Downloading model weights…"):
         urllib.request.urlretrieve(HF_URL, MODEL_PATH)
-
-# ── PAGE CONFIG ─────────────────────
-st.set_page_config(
-    page_title="ASD Screening Tool",
-    page_icon="🧠",
-    layout="centered",
-    initial_sidebar_state="collapsed",
-)
 
 # ── CSS ─────────────────────────────
 st.markdown("""
