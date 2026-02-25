@@ -12,26 +12,16 @@ Preprocessing:
     Resize → 224×224, ImageNet normalisation
     mean=[0.485, 0.456, 0.406]  std=[0.229, 0.224, 0.225]
 
-Model path (relative to project root):
-    autism-multimodal-fusion/
-    └── src/
-        └── models/
-            └── best_fusion_model.pth
-
-To download from Google Drive (run once in Colab, then copy to local):
-    from google.colab import drive
-    drive.mount('/content/drive')
-    import shutil, os
-    os.makedirs('src/models', exist_ok=True)
-    shutil.copy(
-        '/content/drive/MyDrive/best_fusion_model.pth',
-        'src/models/best_fusion_model.pth'
-    )
+Model weights:
+    Hosted on Hugging Face — downloaded automatically at startup.
+    Local path: src/models/best_fusion_model.pth
+    HF repo:    mbaraka1/asd-fusion-model
 """
 
 import os
 import io
 import time
+import urllib.request
 from pathlib import Path
 
 import streamlit as st
@@ -47,11 +37,19 @@ try:
 except ImportError:
     TORCH_AVAILABLE = False
 
-# ── PATHS ───────────────────────────
-# All paths relative to this file — works from any machine after cloning repo.
-# app/streamlit_app.py → parent = app/ → parent = project root
+# ── PATHS ─────────────────────────────────────────────────────────────────────
+# Model is downloaded from Hugging Face on first run and cached locally.
 APP_DIR    = Path(__file__).parent
-MODEL_PATH = APP_DIR.parent / "models" / "best_fusion_model.pth"
+MODEL_DIR  = APP_DIR.parent / "models"
+MODEL_PATH = MODEL_DIR / "best_fusion_model.pth"
+HF_URL     = "https://huggingface.co/mbaraka1/asd-fusion-model/resolve/main/best_fusion_model.pth"
+
+# Download weights from Hugging Face if not present locally
+# This runs once on Streamlit Cloud startup — subsequent runs use the cached file
+if not MODEL_PATH.exists():
+    MODEL_DIR.mkdir(parents=True, exist_ok=True)
+    with st.spinner("Downloading model weights…"):
+        urllib.request.urlretrieve(HF_URL, MODEL_PATH)
 
 # ── PAGE CONFIG ─────────────────────
 st.set_page_config(
@@ -281,7 +279,9 @@ def load_model(model_path: Path):
         msg = (
             "Model weights not found.<br>"
             "Expected: <code>" + str(model_path) + "</code><br><br>"
-            "Ensure <code>best_fusion_model.pth</code> is present at the path above."
+            "The file should have been downloaded automatically at startup. "
+            "Try refreshing the page. If the problem persists, the Hugging Face "
+            "source may be temporarily unavailable."
         )
         return None, msg
 
